@@ -18,7 +18,7 @@ def transform(string_list, split_char=','):
 
 def truncate(int_list, max_len=20, pad=0):
     if len(int_list) < max_len:
-        return len(int_list), [pad] * (max_len - len(int_list)) + int_list
+        return len(int_list),  int_list + [pad] * (max_len - len(int_list))
     return max_len, int_list[-max_len:]
 
 
@@ -27,12 +27,13 @@ def collect_data(batch_data, pad=0, max_len=20):
     seq = [c[1] for c in batch_data]
     avid = [c[2] for c in batch_data]
     label = [c[3] for c in batch_data]
+
     mids = [int(c) for c in mid]
+    # print(avid[0])
     avids = [int(c) for c in avid]
     labels = [int(c) for c in label]
     seqs = [truncate(transform(c.replace('\t', ''), split_char=','))[1] for c in seq]
     lens = [truncate(transform(c.replace('\t', ''), split_char=','))[0] for c in seq]
-    print(len(lens))
     mids = torch.LongTensor(mids)
     seqs = torch.LongTensor(seqs)
     avids = torch.LongTensor(avids)
@@ -58,6 +59,7 @@ class MindDataset(Dataset):
 if __name__ == '__main__':
     data = get_data('../data/samples.txt')
     # print(data)
+    print(len(data))
     mid, seq, avid, label, lens = collect_data(batch_data=data)
     dataset = MindDataset(mid, seq, avid, label, lens)
-    print(dataset[0])
+    print(len(dataset))

@@ -37,10 +37,11 @@ class Routing(nn.Module):
         ## low_capsule: B * H * D
         global high_capsule
         B, _, embed_size = low_capsule.size()
-        assert torch.max(seq_len).item() < self.max_len
+        assert torch.max(seq_len).item() <= self.max_len
         seq_len_tile = seq_len.repeat(1, self.max_K)
         for i in range(self.iteration):
             mask = sequence_mask(seq_len_tile, self.max_len)
+            mask = torch.reshape(mask, [B, self.max_K, self.max_len])
             ## mask: B * max_K * max_len
             ## W: B * max_K * max_len
             ## low_capsule_new: B * max_len * hidden_units
@@ -48,7 +49,7 @@ class Routing(nn.Module):
             B_tile = self.B_matrix.repeat(B, 1, 1)
             B_mask = torch.where(mask, B_tile, pad)
             W = nn.functional.softmax(B_mask, dim=-1)
-            low_capsule_new = torch.einsum('ijk,kl->ijl', (low_capsule, self.S_matrix))
+            low_capsule_new = torch.einsum('ijk,lo->ilk', (low_capsule, self.S_matrix))
             high_capsule_tmp = torch.matmul(W, low_capsule_new)
             high_capsule = squash(high_capsule_tmp)
             B_delta = torch.sum(
@@ -71,6 +72,7 @@ class Mind(nn.Module):
         self.routing = Routing(max_len, input_units, output_units, iteration, max_K)
         self.label_linear = nn.Linear(dim, output_units)
         self.user_linaer = nn.Linear(dim, output_units)
+        self.capsule_linear = nn.Linear(dim,output_units)
         self.output_units = output_units
         self.input_units = input_units
         self.final_linear = nn.Linear(self.max_K * self.max_len, 1)
@@ -79,6 +81,7 @@ class Mind(nn.Module):
         ## user_ids: B * 1
         ## items: B*H
         ## labels: B*1
+        B = user_ids.shape[0]
         user_ids_embedding = self.user_embedding(user_ids)
         user_ids_embedding = self.user_linaer(user_ids_embedding)
         item_ids_embedding = self.item_embedding(items)
@@ -86,18 +89,23 @@ class Mind(nn.Module):
         labels_embedding = self.label_linear(labels_embedding)
         ## B * 1 * output_units
         capsule_output = self.routing(item_ids_embedding, seq_lens)
+        capsule_output = self.capsule_linear(capsule_output)
         ## capsule_output_user_added: B * max_K * output_units
+        user_ids_embedding = user_ids_embedding.unsqueeze(dim=1)
         capsule_output_user_added = capsule_output + user_ids_embedding
         capsule_output_user_added = F.relu_(capsule_output_user_added)
-        attention_weight = torch.multiply(capsule_output_user_added, labels_embedding.repeat(1, self.max_K, 1))
+        pos_label_embedding = labels_embedding.unsqueeze(dim=1)
+        pos_label_embedding = pos_label_embedding.reshape(B,-1,self.output_units)
+        attention_weight = torch.multiply(capsule_output_user_added, pos_label_embedding.repeat(1, self.max_K, 1))
         attention_weight = torch.pow(attention_weight, self.p)
         attention_weight = torch.sum(attention_weight, dim=-1, keepdim=False)
         attention_weight = nn.functional.softmax(attention_weight, dim=1)
-        attention_output = capsule_output_user_added * attention_weight.repeat(1, 1, self.output_units)
+        attention_output = capsule_output_user_added * attention_weight.unsqueeze(dim=-1)
+
         attention_output = attention_output.view(attention_weight.size()[0], -1)
         attention_output = self.final_linear(attention_output)
-        output = F.sigmoid(attention_output)
-        return output
+        # output = F.sigmoid(attention_output)
+        return attention_output
 
 
 if __name__ == '__main__':
@@ -108,4 +116,4 @@ if __name__ == '__main__':
     seq_len = torch.ones(batch_size, 1)
     routing = Routing(seq_length, 4, 3, 1, 2)
     res = routing(input, seq_len)
-    print(res.shape)
+    # print(res.shape)
